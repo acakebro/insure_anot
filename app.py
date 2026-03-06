@@ -399,6 +399,9 @@ def care_df_to_paths(df: pd.DataFrame) -> Dict[str, CarePathParameters]:
 
 
 def render_setup_editor(prefix: str, default_setup: PolicySetup) -> PolicySetup:
+    is_ge_default = "great supremehealth" in default_setup.gsh_plan_name.lower()
+    is_income_default = "enhanced incomeshield" in default_setup.gsh_plan_name.lower()
+
     st.subheader(default_setup.setup_name)
     st.caption(
         "Source tags used below: `POLICY-SOURCED DEFAULT` = prefilled from policy tables, "
@@ -444,7 +447,27 @@ def render_setup_editor(prefix: str, default_setup: PolicySetup) -> PolicySetup:
         )
 
     with st.expander("Premium Age-Bands (Editable)", expanded=True):
-        st.caption("`POLICY-SOURCED DEFAULT` for GE plans. Overwrite if your setup is from another insurer.")
+        if is_ge_default:
+            st.caption(
+                "`POLICY-SOURCED DEFAULT` from GE premium tables. Overwrite if your setup is from another insurer."
+            )
+        elif is_income_default:
+            st.caption(
+                "`POLICY-SOURCED DEFAULT` from Income EIS Basic (SG) main-plan tables. "
+                "Overwrite if your setup differs."
+            )
+        else:
+            st.caption(
+                "`POLICY-SOURCED DEFAULT` if applicable; otherwise treat as a scenario template and overwrite."
+            )
+        st.caption(
+            "Columns are intentionally the same across Setup A/B/C for consistent comparison math."
+        )
+        if not include_gtc and not include_ghc:
+            st.caption(
+                "For ISP-only baseline, keep `gtc_total`, `gtc_cash`, `ghc_total`, `ghc_cash` at `0` "
+                "(unless you intentionally model rider/add-on costs)."
+            )
         st.caption(
             "Each row is an age band. Totals and cash are annual SGD values. "
             "Medisave is computed as total minus cash."
@@ -454,13 +477,25 @@ def render_setup_editor(prefix: str, default_setup: PolicySetup) -> PolicySetup:
             "If you only enter one row (e.g., age 30), future years will rely on carry-forward."
         )
         premium_df_default = setup_to_premium_df(default_setup)
+        disabled_columns = []
+        if not include_gtc:
+            disabled_columns.extend(["gtc_total", "gtc_cash"])
+        if not include_ghc:
+            disabled_columns.extend(["ghc_total", "ghc_cash"])
         premium_df = st.data_editor(
             premium_df_default,
             key=f"{prefix}_premium_df",
             num_rows="dynamic",
             use_container_width=True,
+            disabled=disabled_columns,
         )
         premium_df = sanitize_premium_df(pd.DataFrame(premium_df))
+        if not include_gtc:
+            premium_df["gtc_total"] = 0.0
+            premium_df["gtc_cash"] = 0.0
+        if not include_ghc:
+            premium_df["ghc_total"] = 0.0
+            premium_df["ghc_cash"] = 0.0
 
     with st.expander("Care Path Parameters (Editable)", expanded=True):
         st.caption("`MIXED`: policy terms + scenario assumptions (provider pathway, panel usage, conservative stress-case).")
@@ -968,6 +1003,10 @@ def main() -> None:
     }
 
     st.markdown("## Opportunity Cost")
+    st.caption(
+        "Note: 'Insurance Multiplier' (coverage / cash value) is a life-policy conversion metric "
+        "and is not used in this hospital-plan module."
+    )
     i1, i2 = st.columns(2)
     with i1:
         reference_label = st.selectbox(
@@ -1024,11 +1063,12 @@ def main() -> None:
     delta_total_now = float(compared_series["total"][0] - reference_series["total"][0])
     delta_cash_now = float(compared_series["cash"][0] - reference_series["cash"][0])
     delta_medisave_now = delta_total_now - delta_cash_now
-    st.markdown(
-        f"**Total premium = Medisave + Cash.** At ANB {anb}, "
+    delta_explanation = (
+        f"Total premium = Medisave + Cash. At ANB {anb}, "
         f"delta ({compared_label} - {reference_label}) is "
         f"{money(delta_total_now)} total = {money(delta_cash_now)} cash + {money(delta_medisave_now)} Medisave."
     )
+    st.markdown(f"**{escape_markdown_text(delta_explanation)}**")
 
     cash_fig = build_line_figure(
         x_values=ages,
@@ -1109,6 +1149,18 @@ def main() -> None:
     claim_bill_for_check = float(primary_bill)
     claim_age_index = ages.index(claim_age)
     invested_pot_at_claim_age = float(invest_cash_base[claim_age_index])
+    invested_principal_at_claim_age = float(
+        sum(
+            max(0.0, float(compared_series["cash"][idx]) - float(reference_series["cash"][idx]))
+            for idx in range(claim_age_index + 1)
+        )
+    )
+    invested_gain_at_claim_age = invested_pot_at_claim_age - invested_principal_at_claim_age
+
+    reference_cash_paid_to_date = float(reference_series["cum_cash"][claim_age_index])
+    compared_cash_paid_to_date = float(compared_series["cum_cash"][claim_age_index])
+    reference_total_paid_to_date = float(reference_series["cum_total"][claim_age_index])
+    compared_total_paid_to_date = float(compared_series["cum_total"][claim_age_index])
 
     reference_claim = compute_claim_outcome(
         reference_setup,
@@ -1119,6 +1171,8 @@ def main() -> None:
         ClaimScenario(bill_amount=claim_bill_for_check, care_path_key=claim_path_for_check),
     )
     remaining_after_reference_oop = invested_pot_at_claim_age - float(reference_claim["final_oop"])
+    reference_cash_burden_now = reference_cash_paid_to_date + float(reference_claim["final_oop"])
+    compared_cash_burden_now = compared_cash_paid_to_date + float(compared_claim["final_oop"])
 
     sf1, sf2, sf3 = st.columns(3)
     with sf1:
@@ -1137,18 +1191,80 @@ def main() -> None:
             money(float(compared_claim["final_oop"])),
         )
 
+    st.markdown("#### Premiums Paid To Claim Age")
+    premium_paid_df = pd.DataFrame(
+        [
+            {
+                "Setup": reference_label,
+                "Cash Premium Paid to Claim Age": money(reference_cash_paid_to_date),
+                "Total Premium Paid to Claim Age": money(reference_total_paid_to_date),
+            },
+            {
+                "Setup": compared_label,
+                "Cash Premium Paid to Claim Age": money(compared_cash_paid_to_date),
+                "Total Premium Paid to Claim Age": money(compared_total_paid_to_date),
+            },
+        ]
+    )
+    st.dataframe(premium_paid_df, use_container_width=True, hide_index=True)
+    premium_delta_col1, premium_delta_col2 = st.columns(2)
+    with premium_delta_col1:
+        st.metric(
+            "Cash Premium Delta (Compared - Reference)",
+            money(compared_cash_paid_to_date - reference_cash_paid_to_date),
+        )
+    with premium_delta_col2:
+        st.metric(
+            "Total Premium Delta (Compared - Reference)",
+            money(compared_total_paid_to_date - reference_total_paid_to_date),
+        )
+
+    st.markdown("#### Investment Build-Up (Cash Gap Strategy)")
+    i_cap1, i_cap2 = st.columns(2)
+    with i_cap1:
+        st.metric(
+            f"Invested Capital Contributed by Age {claim_age}",
+            money(invested_principal_at_claim_age),
+        )
+    with i_cap2:
+        st.metric(
+            f"Investment Gain by Age {claim_age} (Base Return)",
+            money(invested_gain_at_claim_age),
+        )
+
+    st.markdown("#### Cash Burden At Claim Age (Premium Paid + OOP)")
+    cash_burden_df = pd.DataFrame(
+        [
+            {
+                "Setup": reference_label,
+                "Cash Premium Paid to Claim Age": money(reference_cash_paid_to_date),
+                "OOP for Claim Scenario": money(float(reference_claim["final_oop"])),
+                "Cash Burden (Premium + OOP)": money(reference_cash_burden_now),
+            },
+            {
+                "Setup": compared_label,
+                "Cash Premium Paid to Claim Age": money(compared_cash_paid_to_date),
+                "OOP for Claim Scenario": money(float(compared_claim["final_oop"])),
+                "Cash Burden (Premium + OOP)": money(compared_cash_burden_now),
+            },
+        ]
+    )
+    st.dataframe(cash_burden_df, use_container_width=True, hide_index=True)
+
     if remaining_after_reference_oop >= 0:
-        st.success(
+        self_fund_success = (
             f"If you choose {reference_label}, invest the cash premium gap at base return, "
             f"and a {money(claim_bill_for_check)} claim happens at age {claim_age}, "
             f"you can pay OOP and still have about {money(remaining_after_reference_oop)} left."
         )
+        st.success(escape_markdown_text(self_fund_success))
     else:
-        st.warning(
+        self_fund_warning = (
             f"If you choose {reference_label}, invest the cash premium gap at base return, "
             f"and a {money(claim_bill_for_check)} claim happens at age {claim_age}, "
             f"you face about {money(abs(remaining_after_reference_oop))} shortfall after paying OOP."
         )
+        st.warning(escape_markdown_text(self_fund_warning))
 
     ranking_df = pd.DataFrame(
         [
