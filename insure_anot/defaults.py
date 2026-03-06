@@ -100,6 +100,59 @@ def _ge_policy_bands(
     return bands
 
 
+# Source: Income Enhanced IncomeShield premium table (main plan), Singapore Citizen/PR,
+# Basic-SG column, effective 1 Oct 2025.
+# URL: https://www.income.com.sg/health-and-personal-accident/enhanced-incomeshield/premiums
+# Values below are mapped as:
+# gsh_total = MediShield Life premium + Additional private insurance coverage premium (Basic-SG)
+# gsh_cash = cash outlay shown in Basic-SG cash outlay column
+_INCOME_EIS_BASIC_SG_ROWS: List[Tuple[int, int, float, float, float]] = [
+    # age_from, age_to, medishield_premium, basic_sg_additional_premium, basic_sg_cash_outlay
+    (1, 18, 200.00, 35.00, 0.00),
+    (19, 20, 200.00, 47.00, 0.00),
+    (21, 25, 295.00, 48.00, 0.00),
+    (26, 30, 295.00, 48.00, 0.00),
+    (31, 35, 503.00, 86.00, 0.00),
+    (36, 40, 503.00, 108.00, 0.00),
+    (41, 45, 637.00, 155.00, 0.00),
+    (46, 50, 637.00, 178.00, 0.00),
+    (51, 55, 903.00, 217.00, 0.00),
+    (56, 60, 903.00, 220.00, 0.00),
+    (61, 65, 1131.00, 390.00, 0.00),
+    (66, 70, 1326.00, 615.00, 15.00),
+    (71, 73, 1643.00, 914.00, 14.00),
+    (74, 75, 1816.00, 968.00, 68.00),
+    (76, 78, 2027.00, 1158.00, 258.00),
+    (79, 80, 2187.00, 1318.00, 418.00),
+    (81, 83, 2303.00, 1547.00, 647.00),
+    (84, 85, 2616.00, 1703.00, 803.00),
+    (86, 88, 2785.00, 1879.00, 979.00),
+    (89, 90, 2785.00, 2189.00, 1289.00),
+    (91, 93, 2826.00, 2620.00, 1720.00),
+    (94, 95, 2826.00, 2922.00, 2022.00),
+    (96, 98, 2826.00, 3221.00, 2321.00),
+    (99, 100, 2826.00, 3530.00, 2630.00),
+]
+
+
+def _income_eis_basic_sg_policy_bands() -> List[PremiumBand]:
+    bands: List[PremiumBand] = []
+    for age_from, age_to, msl, additional, cash_outlay in _INCOME_EIS_BASIC_SG_ROWS:
+        bands.append(
+            PremiumBand(
+                age_from=age_from,
+                age_to=age_to,
+                gsh_total=msl + additional,
+                gsh_cash=cash_outlay,
+                gtc_total=0.0,
+                gtc_cash=0.0,
+                ghc_total=0.0,
+                ghc_cash=0.0,
+            )
+        )
+    return bands
+
+
 def default_person_profile() -> PersonProfile:
     return PersonProfile(
         date_of_birth=DEFAULT_DOB,
@@ -158,12 +211,12 @@ def default_setup_b() -> PolicySetup:
 def default_setup_current_isp_only() -> PolicySetup:
     return PolicySetup(
         setup_name="Setup A (Current ISP Only)",
-        gsh_plan_name="Integrated Shield Base (No Rider)",
+        gsh_plan_name="Income Enhanced IncomeShield Basic (SG) - Main Plan",
         gtc_plan_name="No Rider",
         ghc_plan_name="No Hospital Cash Plan",
         include_gtc=False,
         include_ghc=False,
-        premium_bands=_ge_policy_bands(ghc_total=0.0, ghc_cash=0.0),
+        premium_bands=_income_eis_basic_sg_policy_bands(),
         care_paths={
             "partner_panel": CarePathParameters(
                 name="Private path baseline (no rider)",

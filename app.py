@@ -56,7 +56,7 @@ def get_default_setups(mode_key: str) -> tuple[PolicySetup, PolicySetup, PolicyS
         return (
             clone_setup(
                 default_setup_current_isp_only(),
-                "Setup A (Current ISP Baseline - replace if non-GE)",
+                "Setup A (Current ISP Baseline - Income EIS Basic SG default)",
             ),
             clone_setup(default_setup_ge_full_suite(), "Setup B (Proposed GE Full Suite)"),
             clone_setup(default_setup_b(), "Setup C (GE Without GTC Rider)"),
@@ -609,8 +609,8 @@ def main() -> None:
         "3-way comparison mode: edit Setup A / B / C and rank all options by projected cashflow and claim exposure."
     )
     st.info(
-        "Default data is preloaded from your policy screenshots (effective 27 Feb 2026): "
-        "full ANB premium bands for GSH P PRIME and GTC P PRIME are baked in. "
+        "Default data is preloaded from policy sources: GE GSH/GTC full ANB bands and "
+        "Income Enhanced IncomeShield Basic (SG) main-plan bands (effective 1 Oct 2025). "
         "GHC Plan A uses the screenshot annual value (S$170.04) as a carry-forward default, "
         "and remains editable."
     )
@@ -700,10 +700,9 @@ def main() -> None:
     st.caption(f"Active preset: {selected_mode_label}")
     if selected_mode_key == "isp_vs_ge_full":
         st.warning(
-            "Important: in this preset, Setup A starts from a GE ISP-only proxy default "
-            "(GSH baseline without GTC/GHC) so you can compare quickly. "
-            "If your true current ISP is from another insurer, overwrite Setup A Premium Age-Bands "
-            "and Care Path Parameters with your own policy values."
+            "Important: in this preset, Setup A defaults to Income Enhanced IncomeShield Basic (SG) "
+            "main-plan rates and no rider/cash plan. If your true current ISP is different, overwrite "
+            "Setup A Premium Age-Bands and Care Path Parameters with your own policy values."
         )
     intro_a, intro_b, intro_c = st.columns(3)
     with intro_a:
