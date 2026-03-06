@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import Dict, List
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from insure_anot.defaults import (
@@ -53,7 +54,10 @@ def clone_setup(setup: PolicySetup, setup_name: str) -> PolicySetup:
 def get_default_setups(mode_key: str) -> tuple[PolicySetup, PolicySetup, PolicySetup]:
     if mode_key == "isp_vs_ge_full":
         return (
-            clone_setup(default_setup_current_isp_only(), "Setup A (Current ISP Baseline)"),
+            clone_setup(
+                default_setup_current_isp_only(),
+                "Setup A (Current ISP Baseline - replace if non-GE)",
+            ),
             clone_setup(default_setup_ge_full_suite(), "Setup B (Proposed GE Full Suite)"),
             clone_setup(default_setup_b(), "Setup C (GE Without GTC Rider)"),
         )
@@ -90,14 +94,21 @@ def render_legend_and_guide() -> None:
                     "Meaning": "Age Next Birthday. Insurance pricing usually follows this age basis.",
                 },
                 {"Term": "Cash Premium", "Meaning": "Portion of annual premium paid in cash."},
-                {"Term": "Total Premium", "Meaning": "Cash + Medisave portions combined."},
+                {
+                    "Term": "Total Premium",
+                    "Meaning": "Cash + Medisave portions combined. Formula: Total = Cash + Medisave.",
+                },
                 {
                     "Term": "Anchor Claim",
-                    "Meaning": "Primary claim scenario used for ranking/recommendation (default: S$150,000).",
+                    "Meaning": "Primary claim scenario used for ranking/recommendation (default: S$100,000).",
                 },
                 {
                     "Term": "Opportunity Cost",
                     "Meaning": "Potential invested value of premium differences between setups.",
+                },
+                {
+                    "Term": "Source Tags",
+                    "Meaning": "POLICY-SOURCED DEFAULT means prefilled from policy docs; ASSUMPTION/SCENARIO means user modeling choice.",
                 },
             ]
         )
@@ -108,6 +119,12 @@ def render_legend_and_guide() -> None:
             "1. Choose a preset in the sidebar, then edit Setup A / B / C tabs.\n"
             "2. Set projection assumptions and claim scenarios.\n"
             "3. Review claim OOP, premium projection, opportunity-cost charts, and 3-way ranking."
+        )
+        st.markdown("**Integrated Shield Payment Layers (Simplified)**")
+        st.markdown(
+            "1. Base ISP premium usually has Medisave-paid and cash top-up portions.\n"
+            "2. Rider premium is usually additional cash premium.\n"
+            "3. Optional hospital cash plans are separate add-ons."
         )
         st.caption(
             "Important: every section below this guide is recalculated live from your current inputs. "
@@ -158,6 +175,46 @@ def quality_flag(explicit_pct: float) -> str:
     if explicit_pct >= 60:
         return "Medium"
     return "Low"
+
+
+def build_line_figure(
+    x_values: List[int],
+    series: List[dict],
+    title: str,
+    y_axis_title: str,
+) -> go.Figure:
+    fig = go.Figure()
+    for item in series:
+        fig.add_trace(
+            go.Scatter(
+                x=x_values,
+                y=item["values"],
+                mode="lines+markers",
+                name=item["name"],
+                line={
+                    "width": item.get("width", 2),
+                    "dash": item.get("dash", "solid"),
+                    "color": item.get("color"),
+                },
+                marker={"size": item.get("marker_size", 4)},
+                hovertemplate=f"{item['name']}: S$%{{y:,.2f}}<extra></extra>",
+            )
+        )
+
+    fig.update_layout(
+        title=title,
+        hovermode="x unified",
+        template="plotly_dark",
+        margin={"l": 30, "r": 20, "t": 60, "b": 40},
+        legend={"orientation": "h", "yanchor": "top", "y": -0.2, "xanchor": "left", "x": 0},
+    )
+    fig.update_xaxes(title="Age (ANB)", dtick=5)
+    fig.update_yaxes(
+        title=y_axis_title,
+        tickprefix="S$",
+        separatethousands=True,
+    )
+    return fig
 
 
 def setup_to_premium_df(setup: PolicySetup) -> pd.DataFrame:
@@ -343,6 +400,10 @@ def care_df_to_paths(df: pd.DataFrame) -> Dict[str, CarePathParameters]:
 
 def render_setup_editor(prefix: str, default_setup: PolicySetup) -> PolicySetup:
     st.subheader(default_setup.setup_name)
+    st.caption(
+        "Source tags used below: `POLICY-SOURCED DEFAULT` = prefilled from policy tables, "
+        "`ASSUMPTION/SCENARIO` = editable modeling choice."
+    )
     setup_name = st.text_input(
         "Setup Name",
         value=default_setup.setup_name,
@@ -350,12 +411,14 @@ def render_setup_editor(prefix: str, default_setup: PolicySetup) -> PolicySetup:
     )
     col1, col2 = st.columns(2)
     with col1:
+        st.caption("`ASSUMPTION/SCENARIO`")
         include_gtc = st.checkbox(
             "Include GTC Rider",
             value=default_setup.include_gtc,
             key=f"{prefix}_include_gtc",
         )
     with col2:
+        st.caption("`ASSUMPTION/SCENARIO`")
         include_ghc = st.checkbox(
             "Include GHC Plan",
             value=default_setup.include_ghc,
@@ -363,6 +426,7 @@ def render_setup_editor(prefix: str, default_setup: PolicySetup) -> PolicySetup:
         )
 
     with st.expander("Plan Labels", expanded=False):
+        st.caption("`ASSUMPTION/SCENARIO` (display names only; does not change math)")
         gsh_plan_name = st.text_input(
             "GSH Plan Name",
             value=default_setup.gsh_plan_name,
@@ -380,6 +444,7 @@ def render_setup_editor(prefix: str, default_setup: PolicySetup) -> PolicySetup:
         )
 
     with st.expander("Premium Age-Bands (Editable)", expanded=True):
+        st.caption("`POLICY-SOURCED DEFAULT` for GE plans. Overwrite if your setup is from another insurer.")
         st.caption(
             "Each row is an age band. Totals and cash are annual SGD values. "
             "Medisave is computed as total minus cash."
@@ -398,6 +463,7 @@ def render_setup_editor(prefix: str, default_setup: PolicySetup) -> PolicySetup:
         premium_df = sanitize_premium_df(pd.DataFrame(premium_df))
 
     with st.expander("Care Path Parameters (Editable)", expanded=True):
+        st.caption("`MIXED`: policy terms + scenario assumptions (provider pathway, panel usage, conservative stress-case).")
         st.caption(
             "Rates are decimals (0.10 = 10%). "
             "Set rider_loss_limit blank to represent no cap."
@@ -594,27 +660,29 @@ def main() -> None:
         st.markdown("---")
         st.subheader("Claim Scenario Inputs")
         st.caption(
-            "These are sample hospital bill amounts to test. "
-            "Each selected amount becomes one scenario row in the Claim Scenario Results table."
+            "Use one primary bill scenario for decision ranking. "
+            "You can optionally add one extra bill scenario for comparison."
         )
-        preset_bills = st.multiselect(
-            "Bill Scenarios to Test (SGD)",
-            options=[70000, 150000, 500000],
-            default=[70000, 150000, 500000],
+        primary_bill = st.number_input(
+            "Primary Bill Scenario (SGD)",
+            min_value=1000.0,
+            value=100000.0,
+            step=1000.0,
+            format="%.0f",
             help=(
-                "Pick one or more bill sizes. Example: 70000 means a S$70,000 hospital bill "
-                "used to compute out-of-pocket under each setup."
+                "Main hospital bill used for ranking, recommendation, and self-fund checks. "
+                "Example: 100000 means a S$100,000 claim scenario."
             ),
         )
-        custom_bill = st.number_input(
-            "Add One Custom Bill (optional)",
+        additional_bill = st.number_input(
+            "Optional Additional Bill Scenario (SGD)",
             min_value=0.0,
             value=0.0,
             step=1000.0,
             format="%.0f",
             help=(
-                "Optional extra scenario. Enter 0 to ignore. "
-                "If you enter 120000, the app adds a S$120,000 bill scenario."
+                "Enter 0 to ignore. If you enter 150000, claim results will also show a "
+                "S$150,000 scenario row."
             ),
         )
 
@@ -630,6 +698,13 @@ def main() -> None:
 
     st.markdown("## What Setup A / B / C Means")
     st.caption(f"Active preset: {selected_mode_label}")
+    if selected_mode_key == "isp_vs_ge_full":
+        st.warning(
+            "Important: in this preset, Setup A starts from a GE ISP-only proxy default "
+            "(GSH baseline without GTC/GHC) so you can compare quickly. "
+            "If your true current ISP is from another insurer, overwrite Setup A Premium Age-Bands "
+            "and Care Path Parameters with your own policy values."
+        )
     intro_a, intro_b, intro_c = st.columns(3)
     with intro_a:
         st.markdown(f"**Setup A**: `{setup_a.setup_name}`")
@@ -669,8 +744,7 @@ def main() -> None:
         st.stop()
 
     bills = sorted(
-        {float(x) for x in preset_bills if x > 0}
-        | ({custom_bill} if custom_bill > 0 else set())
+        {float(primary_bill)} | ({float(additional_bill)} if additional_bill > 0 else set())
     )
     if not bills:
         st.warning("Please choose at least one bill amount.")
@@ -798,9 +872,9 @@ def main() -> None:
     )
     st.dataframe(display_claim, use_container_width=True)
 
-    # Anchor recommendation to partner_panel + 150k when available, else first selected bill/path.
+    # Anchor recommendation uses primary bill input and default partner-panel path when available.
     anchor_path = "partner_panel" if "partner_panel" in common_paths else selected_paths[0]
-    anchor_bill = 150000.0 if 150000.0 in bills else bills[0]
+    anchor_bill = float(primary_bill)
     oop_a_anchor = compute_claim_outcome(
         setup_a, ClaimScenario(bill_amount=anchor_bill, care_path_key=anchor_path)
     )["final_oop"]
@@ -829,32 +903,64 @@ def main() -> None:
             "cum_cash_c": projection_c["cum_cash"],
         }
     )
-    st.line_chart(
-        premium_df.set_index("age")[
-            [
-                "setup_a_total",
-                "setup_b_total",
-                "setup_c_total",
-                "setup_a_cash",
-                "setup_b_cash",
-                "setup_c_cash",
-            ]
+    annual_fig = build_line_figure(
+        x_values=ages,
+        title="Annual Premium Projection (Total and Cash)",
+        y_axis_title="Annual Premium (SGD)",
+        series=[
+            {"name": "Setup A Total", "values": premium_df["setup_a_total"], "color": "#3B82F6"},
+            {"name": "Setup B Total", "values": premium_df["setup_b_total"], "color": "#EF4444"},
+            {"name": "Setup C Total", "values": premium_df["setup_c_total"], "color": "#22C55E"},
+            {
+                "name": "Setup A Cash",
+                "values": premium_df["setup_a_cash"],
+                "color": "#93C5FD",
+                "dash": "dot",
+            },
+            {
+                "name": "Setup B Cash",
+                "values": premium_df["setup_b_cash"],
+                "color": "#FCA5A5",
+                "dash": "dot",
+            },
+            {
+                "name": "Setup C Cash",
+                "values": premium_df["setup_c_cash"],
+                "color": "#86EFAC",
+                "dash": "dot",
+            },
         ],
-        height=280,
     )
-    st.line_chart(
-        premium_df.set_index("age")[
-            [
-                "cum_total_a",
-                "cum_total_b",
-                "cum_total_c",
-                "cum_cash_a",
-                "cum_cash_b",
-                "cum_cash_c",
-            ]
+    cumulative_fig = build_line_figure(
+        x_values=ages,
+        title="Cumulative Premium Projection (Total and Cash)",
+        y_axis_title="Cumulative Premium (SGD)",
+        series=[
+            {"name": "Setup A Cumulative Total", "values": premium_df["cum_total_a"], "color": "#3B82F6"},
+            {"name": "Setup B Cumulative Total", "values": premium_df["cum_total_b"], "color": "#EF4444"},
+            {"name": "Setup C Cumulative Total", "values": premium_df["cum_total_c"], "color": "#22C55E"},
+            {
+                "name": "Setup A Cumulative Cash",
+                "values": premium_df["cum_cash_a"],
+                "color": "#93C5FD",
+                "dash": "dot",
+            },
+            {
+                "name": "Setup B Cumulative Cash",
+                "values": premium_df["cum_cash_b"],
+                "color": "#FCA5A5",
+                "dash": "dot",
+            },
+            {
+                "name": "Setup C Cumulative Cash",
+                "values": premium_df["cum_cash_c"],
+                "color": "#86EFAC",
+                "dash": "dot",
+            },
         ],
-        height=280,
     )
+    st.plotly_chart(annual_fig, use_container_width=True)
+    st.plotly_chart(cumulative_fig, use_container_width=True)
 
     setup_projection_map = {
         "Setup A": {"setup": setup_a, "projection": projection_a, "anchor_oop": oop_a_anchor},
@@ -878,6 +984,8 @@ def main() -> None:
             index=0,
         )
 
+    reference_setup = setup_projection_map[reference_label]["setup"]
+    compared_setup = setup_projection_map[compared_label]["setup"]
     reference_series = setup_projection_map[reference_label]["projection"]
     compared_series = setup_projection_map[compared_label]["projection"]
     invest_cash_low = project_investment_delta(
@@ -913,39 +1021,135 @@ def main() -> None:
     st.caption(
         f"Opportunity cost shown for choosing {compared_label} instead of {reference_label}."
     )
-    c1, c2 = st.columns(2)
-    with c1:
-        st.caption("Cash Outlay Delta Invested")
-        st.line_chart(
-            invest_df.set_index("age")[["cash_low", "cash_base", "cash_high"]],
-            height=280,
+
+    delta_total_now = float(compared_series["total"][0] - reference_series["total"][0])
+    delta_cash_now = float(compared_series["cash"][0] - reference_series["cash"][0])
+    delta_medisave_now = delta_total_now - delta_cash_now
+    st.markdown(
+        f"**Total premium = Medisave + Cash.** At ANB {anb}, "
+        f"delta ({compared_label} - {reference_label}) is "
+        f"{money(delta_total_now)} total = {money(delta_cash_now)} cash + {money(delta_medisave_now)} Medisave."
+    )
+
+    cash_fig = build_line_figure(
+        x_values=ages,
+        title="Invested Premium Difference (Cash Outlay Only)",
+        y_axis_title="Projected Investment Value (SGD)",
+        series=[
+            {"name": "Low Return", "values": invest_df["cash_low"], "color": "#FCA5A5"},
+            {"name": "Base Return", "values": invest_df["cash_base"], "color": "#93C5FD"},
+            {"name": "High Return", "values": invest_df["cash_high"], "color": "#3B82F6"},
+        ],
+    )
+    st.plotly_chart(cash_fig, use_container_width=True)
+
+    same_cash_total = (
+        all(abs(a - b) < 1e-9 for a, b in zip(invest_cash_low, invest_total_low))
+        and all(abs(a - b) < 1e-9 for a, b in zip(invest_cash_base, invest_total_base))
+        and all(abs(a - b) < 1e-9 for a, b in zip(invest_cash_high, invest_total_high))
+    )
+    if same_cash_total:
+        st.info(
+            "Cash-only and Total-premium opportunity-cost views are identical in this setup pair "
+            "because the compared-vs-reference premium delta is effectively all cash (very small/no Medisave delta)."
         )
-    with c2:
-        st.caption("Total Premium Delta Invested (incl. Medisave)")
-        st.line_chart(
-            invest_df.set_index("age")[["total_low", "total_base", "total_high"]],
-            height=280,
+
+    with st.expander("Advanced View: Include Medisave Portion in Opportunity Cost", expanded=False):
+        st.caption(
+            "Use this only if you also want to treat Medisave premium differences as economic opportunity cost."
         )
+        total_fig = build_line_figure(
+            x_values=ages,
+            title="Invested Premium Difference (Total Premium = Cash + Medisave)",
+            y_axis_title="Projected Investment Value (SGD)",
+            series=[
+                {"name": "Low Return", "values": invest_df["total_low"], "color": "#FCA5A5"},
+                {"name": "Base Return", "values": invest_df["total_base"], "color": "#93C5FD"},
+                {"name": "High Return", "values": invest_df["total_high"], "color": "#3B82F6"},
+            ],
+        )
+        st.plotly_chart(total_fig, use_container_width=True)
 
     # Optional pairwise guidance for the selected opportunity-cost pair.
     pair_result = project_setup(
-        setup_projection_map[compared_label]["setup"],
-        setup_projection_map[reference_label]["setup"],
+        compared_setup,
+        reference_setup,
         anb,
         assumptions,
     )
     pair_guidance = make_light_guidance(
-        setup_projection_map[compared_label]["setup"],
-        setup_projection_map[reference_label]["setup"],
+        compared_setup,
+        reference_setup,
         pair_result,
         float(setup_projection_map[compared_label]["anchor_oop"]),
         float(setup_projection_map[reference_label]["anchor_oop"]),
     )
-    st.info(escape_markdown_text(f"Pair Guidance ({compared_label} vs {reference_label}): {pair_guidance}"))
-    st.caption(
-        "How to read: `cash_*` means only cash-paid premium difference invested; "
-        "`total_*` includes Medisave-paid premiums."
+    st.info(
+        escape_markdown_text(f"Pair Guidance ({compared_label} vs {reference_label}): {pair_guidance}")
     )
+    st.caption(
+        "How to read: opportunity cost uses premium difference (Compared - Reference). "
+        "If Compared is more expensive, that difference is treated as the yearly investable amount."
+    )
+
+    st.markdown("### Same-Scenario Self-Fund Check")
+    claim_age_default = min(max(anb, 50), end_age)
+    claim_age = st.slider(
+        "Assumed claim age for this check",
+        min_value=anb,
+        max_value=end_age,
+        value=claim_age_default,
+    )
+    claim_path_for_check = st.selectbox(
+        "Care path for this check",
+        options=selected_paths,
+        index=0,
+        format_func=lambda k: setup_a.care_paths[k].name,
+        key="self_fund_claim_path",
+    )
+    claim_bill_for_check = float(primary_bill)
+    claim_age_index = ages.index(claim_age)
+    invested_pot_at_claim_age = float(invest_cash_base[claim_age_index])
+
+    reference_claim = compute_claim_outcome(
+        reference_setup,
+        ClaimScenario(bill_amount=claim_bill_for_check, care_path_key=claim_path_for_check),
+    )
+    compared_claim = compute_claim_outcome(
+        compared_setup,
+        ClaimScenario(bill_amount=claim_bill_for_check, care_path_key=claim_path_for_check),
+    )
+    remaining_after_reference_oop = invested_pot_at_claim_age - float(reference_claim["final_oop"])
+
+    sf1, sf2, sf3 = st.columns(3)
+    with sf1:
+        st.metric(
+            f"Invested Pot at Age {claim_age} (Base Return)",
+            money(invested_pot_at_claim_age),
+        )
+    with sf2:
+        st.metric(
+            f"OOP if You Choose {reference_label}",
+            money(float(reference_claim["final_oop"])),
+        )
+    with sf3:
+        st.metric(
+            f"OOP if You Choose {compared_label}",
+            money(float(compared_claim["final_oop"])),
+        )
+
+    if remaining_after_reference_oop >= 0:
+        st.success(
+            f"If you choose {reference_label}, invest the cash premium gap at base return, "
+            f"and a {money(claim_bill_for_check)} claim happens at age {claim_age}, "
+            f"you can pay OOP and still have about {money(remaining_after_reference_oop)} left."
+        )
+    else:
+        st.warning(
+            f"If you choose {reference_label}, invest the cash premium gap at base return, "
+            f"and a {money(claim_bill_for_check)} claim happens at age {claim_age}, "
+            f"you face about {money(abs(remaining_after_reference_oop))} shortfall after paying OOP."
+        )
 
     ranking_df = pd.DataFrame(
         [
