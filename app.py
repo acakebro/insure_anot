@@ -1299,6 +1299,13 @@ def main() -> None:
     ranking_df = ranking_df.sort_values(
         ["combined_score", "cost_rank", "protection_rank"], ascending=[True, True, True]
     ).reset_index(drop=True)
+    cheapest_row = ranking_df.sort_values(["end_cash", "anchor_oop"], ascending=[True, True]).iloc[0]
+    best_protection_row = ranking_df.sort_values(
+        ["anchor_oop", "end_cash"], ascending=[True, True]
+    ).iloc[0]
+    combined_row = ranking_df.sort_values(
+        ["combined_score", "cost_rank", "protection_rank"], ascending=[True, True, True]
+    ).iloc[0]
 
     st.markdown("## End-Age Totals & 3-Way Ranking")
     r1, r2, r3 = st.columns(3)
@@ -1312,7 +1319,40 @@ def main() -> None:
         st.markdown(f"**Setup C Cash**: {money(float(projection_c['cum_cash'][-1]))}")
         st.markdown(f"**Setup C Anchor OOP**: {money(float(oop_c_anchor))}")
 
+    st.markdown("### Highlighted Picks")
+    h1, h2, h3 = st.columns(3)
+    with h1:
+        st.success(
+            escape_markdown_text(
+                f"Cheapest\n{cheapest_row['setup_label']}: {cheapest_row['setup_name']}\n"
+                f"Projected Cash @ End Age: {money(float(cheapest_row['end_cash']))}"
+            )
+        )
+    with h2:
+        st.info(
+            escape_markdown_text(
+                f"Best Protection\n{best_protection_row['setup_label']}: {best_protection_row['setup_name']}\n"
+                f"Anchor OOP @ {money(anchor_bill)}: {money(float(best_protection_row['anchor_oop']))}"
+            )
+        )
+    with h3:
+        st.warning(
+            escape_markdown_text(
+                f"Best Combined Rank\n{combined_row['setup_label']}: {combined_row['setup_name']}\n"
+                f"Combined Score: {int(combined_row['combined_score'])}"
+            )
+        )
+
     ranking_display = ranking_df.copy()
+    ranking_display["Cheapest Pick"] = ranking_display["setup_label"].map(
+        lambda setup_label: "Yes" if setup_label == cheapest_row["setup_label"] else ""
+    )
+    ranking_display["Best Protection Pick"] = ranking_display["setup_label"].map(
+        lambda setup_label: "Yes" if setup_label == best_protection_row["setup_label"] else ""
+    )
+    ranking_display["Best Combined Pick"] = ranking_display["setup_label"].map(
+        lambda setup_label: "Yes" if setup_label == combined_row["setup_label"] else ""
+    )
     ranking_display["end_cash"] = ranking_display["end_cash"].map(money)
     ranking_display["end_total"] = ranking_display["end_total"].map(money)
     ranking_display["anchor_oop"] = ranking_display["anchor_oop"].map(money)
@@ -1326,6 +1366,9 @@ def main() -> None:
             "cost_rank": "Cost Rank",
             "protection_rank": "Protection Rank",
             "combined_score": "Combined Score",
+            "Cheapest Pick": "Cheapest Pick",
+            "Best Protection Pick": "Best Protection Pick",
+            "Best Combined Pick": "Best Combined Pick",
         }
     )
     st.dataframe(ranking_display, use_container_width=True, hide_index=True)
